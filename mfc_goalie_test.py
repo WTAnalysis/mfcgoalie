@@ -185,7 +185,7 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
         )
     )
 
-    passing_threat = gk_events[is_pass].groupby("playerName")["xT_value"].sum().rename("passing_threat")
+    passing_threat = gk_events[is_pass & gk_events["outcome"].eq("Successful")].groupby("playerName")["xT_value"].sum().rename("passing_threat")
     attempted_claim_punch = gk_events[gk_events["typeId"].isin(["Claim", "Punch"])].groupby("playerName").size().rename("attempted_claim_punch")
     keeper_sweeper = gk_events[gk_events["typeId"].isin(["Keeper Sweeper"])].groupby("playerName").size().rename("keeper_sweeper")
     successful_claim_punch = gk_events[gk_events["typeId"].isin(["Claim", "Punch"]) & gk_events["outcome"].eq("Successful")].groupby("playerName").size().rename("successful_claim_punch")
