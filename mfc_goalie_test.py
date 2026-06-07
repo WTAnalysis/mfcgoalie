@@ -395,24 +395,24 @@ def make_pizza(goalie_stats, player_name, title, pizza_cols, params, slice_color
     )
     fig, _ = baker.make_pizza(
         values,
-        figsize=(5.8, 6.2),
+        figsize=(6.8, 7.2),
         color_blank_space="same",
         slice_colors=slice_colors,
         value_colors=text_colors,
         value_bck_colors=slice_colors,
         blank_alpha=0.4,
         kwargs_slices={"edgecolor": "#F2F2F2", "zorder": 2, "linewidth": 1},
-        kwargs_params={"color": "#000000", "fontsize": 11, "fontproperties": font_normal, "va": "center"},
+        kwargs_params={"color": "#000000", "fontsize": 10, "fontproperties": font_normal, "va": "center"},
         kwargs_values={
             "color": "#000000",
-            "fontsize": 11,
+            "fontsize": 10,
             "fontproperties": font_normal,
             "zorder": 3,
             "bbox": {"edgecolor": "#000000", "facecolor": "cornflowerblue", "boxstyle": "round,pad=0.2", "lw": 1},
         },
     )
-    fig.text(0.515, 0.975, f"{player_name} - GK Percentile Rank (0-100) - {title}", size=16, ha="center", fontproperties=font_bold)
-    fig.text(0.515, 0.953, f"Compared against other {league_name} goalkeepers | {season_name}", size=13, ha="center", fontproperties=font_bold)
+    fig.text(0.515, 0.975, f"{player_name} - GK Percentile Rank (0-100) - {title}", size=14, ha="center", fontproperties=font_bold)
+    fig.text(0.515, 0.953, f"Compared against other {league_name} goalkeepers | {season_name}", size=12, ha="center", fontproperties=font_bold)
     fig.text(0.05, 0.02, f"Data from Opta | Metrics are per 90 unless stated | Minimum {MINUTE_THRESHOLD} mins played", size=9, fontproperties=font_italic, ha="left")
     return fig
 
