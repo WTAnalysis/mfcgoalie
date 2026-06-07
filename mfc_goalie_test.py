@@ -440,6 +440,7 @@ CHARTS = [
         "pizza_cols": [
             "attempted_passes_per_90_percentile",
             "pass_completion_percentile",
+            "passing_threat_per_10_passes",
             "pass_15_pct_percentile",
             "pass_15to30_pct_percentile",
             "pass_30to45_pct_percentile",
@@ -453,9 +454,9 @@ CHARTS = [
             "passes_end_centre_left_pct_percentile",
             "passes_end_wide_left_pct_percentile",
         ],
-        "params": ["Attempted Passes", "Pass Completion %", "Passes Completed\nShort", "Passes Completed\n15-30yds", "Passes Completed\n30-45yds", "Passes Completed\nLong", "Passes to CBs", "Passes to FBs", "Passes to CMs", "Passes to\nWide Right", "Passes to\nCentre Right", "Passes to\nCentre", "Passes to\nCentre Left", "Passes to\nWide Left"],
-        "slice_colors": ["red"] * 6 + ["#63ace3"] * 3 + ["#2f316a"] * 5,
-        "text_colors": ["#000000"] * 9 + ["white"] * 5,
+        "params": ["Attempted Passes", "Pass Completion %", "Passing xThreat", "Passes Completed\nShort", "Passes Completed\n15-30yds", "Passes Completed\n30-45yds", "Passes Completed\nLong", "Passes to CBs", "Passes to FBs", "Passes to CMs", "Passes to\nWide Right", "Passes to\nCentre Right", "Passes to\nCentre", "Passes to\nCentre Left", "Passes to\nWide Left"],
+        "slice_colors": ["red"] * 7 + ["#63ace3"] * 3 + ["#2f316a"] * 5,
+        "text_colors": ["#000000"] * 10 + ["white"] * 5,
     },
     {
         "tab": "Receiving",
