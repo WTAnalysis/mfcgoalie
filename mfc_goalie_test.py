@@ -1,4 +1,5 @@
 from pathlib import Path
+import gc
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -97,12 +98,12 @@ def safe_divide(numerator, denominator):
     return np.where(pd.Series(denominator).gt(0), numerator / denominator, np.nan)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=1, ttl=600)
 def load_source_data(matchlog, playerlog):
     return pd.read_parquet(matchlog), pd.read_excel(playerlog)
 
 
-@st.cache_data(show_spinner="Building goalkeeper stats...")
+@st.cache_data(show_spinner="Building goalkeeper stats...", max_entries=1, ttl=600)
 def build_goalie_stats(matchlog, playerlog, minute_threshold):
     df, player_totals = load_source_data(matchlog, playerlog)
     df = df.copy()
@@ -516,3 +517,5 @@ for tab, chart in zip(st.tabs([chart["tab"] for chart in CHARTS]), CHARTS):
         with centre:
             st.pyplot(fig, use_container_width=True)
         plt.close(fig)
+        del fig
+        gc.collect()
