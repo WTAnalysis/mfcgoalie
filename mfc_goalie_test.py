@@ -455,7 +455,7 @@ CHARTS = [
             "passes_end_centre_left_pct_percentile",
             "passes_end_wide_left_pct_percentile",
         ],
-        "params": ["Attempted Passes", "Pass Completion %", "Passing xThreat", "Passes Completed\nShort", "Passes Completed\n15-30yds", "Passes Completed\n30-45yds", "Passes Completed\nLong", "Passes to CBs", "Passes to FBs", "Passes to CMs", "Passes to\nWide Right", "Passes to\nCentre Right", "Passes to\nCentre", "Passes to\nCentre Left", "Passes to\nWide Left"],
+        "params": ["Attempted Passes", "Pass\nCompletion %", "Passing\nxThreat", "Passes\nCompleted\nShort", "Passes\nCompleted\n15-30yds", "Passes\nCompleted\n30-45yds", "Passes\nCompleted\nLong", "Passes\nto CBs", "Passes\nto FBs", "Passes\nto CMs", "Passes to\nWide Right", "Passes to\nCentre Right", "Passes to\nCentre", "Passes to\nCentre Left", "Passes to\nWide Left"],
         "slice_colors": ["red"] * 7 + ["#63ace3"] * 3 + ["#2f316a"] * 5,
         "text_colors": ["#000000"] * 10 + ["white"] * 5,
     },
@@ -513,7 +513,7 @@ for tab, chart in zip(st.tabs([chart["tab"] for chart in CHARTS]), CHARTS):
             league_label(league),
             season_label(season),
         )
-        left, centre, right = st.columns([1, 2, 1])
+        left, centre, right = st.columns([1, 3, 1])
         with centre:
             st.pyplot(fig, use_container_width=True)
         plt.close(fig)
