@@ -440,7 +440,7 @@ CHARTS = [
         "pizza_cols": [
             "attempted_passes_per_90_percentile",
             "pass_completion_percentile",
-            "passing_threat_per_10_passes",
+            "passing_threat_per_10_passes_percentile",
             "pass_15_pct_percentile",
             "pass_15to30_pct_percentile",
             "pass_30to45_pct_percentile",
