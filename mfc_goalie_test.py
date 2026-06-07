@@ -11,8 +11,7 @@ from mplsoccer import PyPizza
 st.set_page_config(page_title="MFC Goalie Test", layout="wide")
 
 APP_ROOT = Path(__file__).resolve().parent
-DATA_ROOT = APP_ROOT
-MINUTE_THRESHOLD = 370
+MINUTE_THRESHOLD = 360
 
 LEAGUE_DICT = {
     "ENG1": "Premier League",
@@ -52,58 +51,55 @@ SEASON_DICT = {
 }
 
 
-def _season_label(season_code):
-    return SEASON_DICT.get(str(season_code), str(season_code))
+def league_label(code):
+    return LEAGUE_DICT.get(str(code), str(code))
 
 
-def _league_label(league_code):
-    return LEAGUE_DICT.get(league_code, league_code)
+def season_label(code):
+    return SEASON_DICT.get(str(code), str(code))
 
 
-def discover_data_files(data_root):
+def discover_data_files(root):
     match_files = {}
     player_files = {}
 
-    for path in data_root.rglob("*.parquet"):
-        stem = path.stem
-        parts = stem.rsplit("_", 1)
+    for path in root.rglob("*.parquet"):
+        parts = path.stem.rsplit("_", 1)
         if len(parts) == 2:
-            match_files.setdefault(tuple(parts), path)
+            match_files[tuple(parts)] = path
 
-    for path in data_root.rglob("*.xlsx"):
-        stem = path.stem
-        if not stem.endswith("_playertotal"):
+    for path in root.rglob("*.xlsx"):
+        if not path.stem.endswith("_playertotal"):
             continue
-        base = stem.removesuffix("_playertotal")
-        parts = base.rsplit("_", 1)
+        parts = path.stem.removesuffix("_playertotal").rsplit("_", 1)
         if len(parts) == 2:
-            player_files.setdefault(tuple(parts), path)
+            player_files[tuple(parts)] = path
 
-    available = []
-    for league, season in sorted(match_files.keys() & player_files.keys()):
-        available.append(
-            {
-                "league": league,
-                "season": season,
-                "matchlog": match_files[(league, season)],
-                "playerlog": player_files[(league, season)],
-            }
-        )
-    return available
+    return [
+        {
+            "league": league,
+            "season": season,
+            "matchlog": match_files[(league, season)],
+            "playerlog": player_files[(league, season)],
+        }
+        for league, season in sorted(match_files.keys() & player_files.keys())
+    ]
 
 
-@st.cache_data(show_spinner=False)
-def load_source_data(matchlog, playerlog):
-    df = pd.read_parquet(matchlog)
-    player_totals = pd.read_excel(playerlog)
-    return df, player_totals
-
-
-def add_missing_columns(frame, columns, default=0):
+def ensure_columns(frame, columns, default=0):
     for col in columns:
         if col not in frame.columns:
             frame[col] = default
     return frame
+
+
+def safe_divide(numerator, denominator):
+    return np.where(pd.Series(denominator).gt(0), numerator / denominator, np.nan)
+
+
+@st.cache_data(show_spinner=False)
+def load_source_data(matchlog, playerlog):
+    return pd.read_parquet(matchlog), pd.read_excel(playerlog)
 
 
 @st.cache_data(show_spinner="Building goalkeeper stats...")
@@ -118,24 +114,22 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
     gk_events = df[df["playing_position"].eq("GK")].copy()
     is_pass = gk_events["typeId"].eq("Pass")
 
-    six_yard_box = is_pass & (gk_events["x"] <= 5.8) & gk_events["y"].between(36.8, 63.2, inclusive="both")
-    penalty_area = is_pass & (gk_events["x"] <= 17) & gk_events["y"].between(21.1, 79.9, inclusive="both") & ~six_yard_box
-    wide_of_box = is_pass & (gk_events["x"] <= 17) & ~six_yard_box & ~penalty_area
-    own_third = is_pass & gk_events["x"].between(17, 33.3, inclusive="both") & ~six_yard_box & ~penalty_area & ~wide_of_box
-    middle_third = is_pass & gk_events["x"].between(33.3, 66.6, inclusive="both")
-
-    gk_events["pass_location"] = np.select(
-        [six_yard_box, penalty_area, wide_of_box, own_third, middle_third],
-        ["Six Yard Box", "Penalty Area", "Wide of Box", "Own Third", "Middle Third"],
-        default=None,
-    )
+    pass_locations = [
+        is_pass & (gk_events["x"] <= 5.8) & gk_events["y"].between(36.8, 63.2, inclusive="both"),
+        is_pass & (gk_events["x"] <= 17) & gk_events["y"].between(21.1, 79.9, inclusive="both"),
+        is_pass & (gk_events["x"] <= 17),
+        is_pass & gk_events["x"].between(17, 33.3, inclusive="both"),
+        is_pass & gk_events["x"].between(33.3, 66.6, inclusive="both"),
+    ]
+    pass_location_names = ["Six Yard Box", "Penalty Area", "Wide of Box", "Own Third", "Middle Third"]
+    gk_events["pass_location"] = np.select(pass_locations, pass_location_names, default=None)
 
     pass_location_counts = (
         gk_events[gk_events["pass_location"].notna()]
         .groupby(["playerName", "pass_location"])
         .size()
         .unstack(fill_value=0)
-        .reindex(columns=["Six Yard Box", "Penalty Area", "Wide of Box", "Own Third", "Middle Third"], fill_value=0)
+        .reindex(columns=pass_location_names, fill_value=0)
         .rename(
             columns={
                 "Six Yard Box": "six_yard_box_passes",
@@ -147,15 +141,9 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
         )
     )
 
-    attempted_passes = gk_events[gk_events["typeId"].eq("Pass")].groupby("playerName").size().rename("attempted_passes")
-    completed_passes = (
-        gk_events[gk_events["typeId"].eq("Pass") & gk_events["outcome"].eq("Successful")]
-        .groupby("playerName")
-        .size()
-        .rename("completed_passes")
-    )
-
-    successful_passes = gk_events[gk_events["typeId"].eq("Pass") & gk_events["outcome"].eq("Successful")].copy()
+    attempted_passes = gk_events[is_pass].groupby("playerName").size().rename("attempted_passes")
+    successful_passes = gk_events[is_pass & gk_events["outcome"].eq("Successful")].copy()
+    completed_passes = successful_passes.groupby("playerName").size().rename("completed_passes")
     successful_passes["true_distance"] = np.sqrt(
         ((successful_passes["end_x"] - successful_passes["x"]) / 100 * 105) ** 2
         + ((successful_passes["end_y"] - successful_passes["y"]) / 100 * 68) ** 2
@@ -180,7 +168,6 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
         ["Wide Right", "Centre Right", "Centre", "Centre Left", "Wide Left"],
         default=None,
     )
-
     end_location_counts = (
         successful_passes[successful_passes["end_location"].notna()]
         .groupby(["playerName", "end_location"])
@@ -198,15 +185,10 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
         )
     )
 
-    passing_threat = gk_events[gk_events["typeId"].eq("Pass")].groupby("playerName")["xT_value"].sum().rename("passing_threat")
+    passing_threat = gk_events[is_pass].groupby("playerName")["xT_value"].sum().rename("passing_threat")
     attempted_claim_punch = gk_events[gk_events["typeId"].isin(["Claim", "Punch"])].groupby("playerName").size().rename("attempted_claim_punch")
     keeper_sweeper = gk_events[gk_events["typeId"].isin(["Keeper Sweeper"])].groupby("playerName").size().rename("keeper_sweeper")
-    successful_claim_punch = (
-        gk_events[gk_events["typeId"].isin(["Claim", "Punch"]) & gk_events["outcome"].eq("Successful")]
-        .groupby("playerName")
-        .size()
-        .rename("successful_claim_punch")
-    )
+    successful_claim_punch = gk_events[gk_events["typeId"].isin(["Claim", "Punch"]) & gk_events["outcome"].eq("Successful")].groupby("playerName").size().rename("successful_claim_punch")
     errors = gk_events[gk_events["typeId"].eq("Error")].groupby("playerName").size().rename("errors")
 
     player_name_stats = (
@@ -261,52 +243,33 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
         "passes_end_centre_left",
         "passes_end_wide_left",
     ]
-    player_name_stats = add_missing_columns(player_name_stats, count_cols)
+    player_name_stats = ensure_columns(player_name_stats, count_cols)
     player_name_stats[count_cols] = player_name_stats[count_cols].fillna(0)
 
     for col in ["six_yard_box_passes", "penalty_area_passes", "wide_of_box_passes", "own_third_passes", "middle_third_passes"]:
-        player_name_stats[f"{col}_pct"] = np.where(player_name_stats["attempted_passes"].gt(0), player_name_stats[col] / player_name_stats["attempted_passes"], np.nan)
-
+        player_name_stats[f"{col}_pct"] = safe_divide(player_name_stats[col], player_name_stats["attempted_passes"])
     for col in ["passes_to_cb", "passes_to_fb", "passes_to_cm"]:
-        player_name_stats[f"{col}_pct"] = np.where(player_name_stats["completed_passes"].gt(0), player_name_stats[col] / player_name_stats["completed_passes"], np.nan)
-
+        player_name_stats[f"{col}_pct"] = safe_divide(player_name_stats[col], player_name_stats["completed_passes"])
     for col in ["pass_15", "pass_15to30", "pass_30to45", "pass_45_plus"]:
-        player_name_stats[f"{col}_pct"] = np.where(player_name_stats["completed_passes"].gt(0), player_name_stats[col] / player_name_stats["completed_passes"], np.nan)
-
+        player_name_stats[f"{col}_pct"] = safe_divide(player_name_stats[col], player_name_stats["completed_passes"])
     for col in ["passes_end_wide_right", "passes_end_centre_right", "passes_end_centre", "passes_end_centre_left", "passes_end_wide_left"]:
-        player_name_stats[f"{col}_pct"] = np.where(player_name_stats["completed_passes"].gt(0), player_name_stats[col] / player_name_stats["completed_passes"], np.nan)
+        player_name_stats[f"{col}_pct"] = safe_divide(player_name_stats[col], player_name_stats["completed_passes"])
 
-    player_name_stats["passing_threat_per_10_passes"] = np.where(
-        player_name_stats["attempted_passes"].gt(0),
-        (player_name_stats["passing_threat"] / player_name_stats["attempted_passes"]) * 10,
-        np.nan,
-    )
-    player_name_stats["pass_completion"] = np.where(
-        player_name_stats["attempted_passes"].gt(0),
-        player_name_stats["completed_passes"] / player_name_stats["attempted_passes"],
-        np.nan,
-    )
-    player_name_stats["claim_punch_success"] = np.where(
-        player_name_stats["attempted_claim_punch"].gt(0),
-        player_name_stats["successful_claim_punch"] / player_name_stats["attempted_claim_punch"],
-        np.nan,
-    )
+    player_name_stats["passing_threat_per_10_passes"] = safe_divide(player_name_stats["passing_threat"], player_name_stats["attempted_passes"]) * 10
+    player_name_stats["pass_completion"] = safe_divide(player_name_stats["completed_passes"], player_name_stats["attempted_passes"])
+    player_name_stats["claim_punch_success"] = safe_divide(player_name_stats["successful_claim_punch"], player_name_stats["attempted_claim_punch"])
     player_name_stats = player_name_stats.drop(columns=["completed_passes", "successful_claim_punch"])
 
     passes_to_gk = df[df["typeId"].eq("Pass") & df["pass_recipient_position"].eq("GK")].copy()
     is_pass_to_gk = passes_to_gk["typeId"].eq("Pass")
-
-    six_yard_box_reception = is_pass_to_gk & (passes_to_gk["end_x"] <= 5.8) & passes_to_gk["end_y"].between(36.8, 63.2, inclusive="both")
-    penalty_area_reception = is_pass_to_gk & (passes_to_gk["end_x"] <= 17) & passes_to_gk["end_y"].between(21.1, 79.9, inclusive="both") & ~six_yard_box_reception
-    wide_of_box_reception = is_pass_to_gk & (passes_to_gk["end_x"] <= 17) & ~six_yard_box_reception & ~penalty_area_reception
-    own_third_reception = is_pass_to_gk & passes_to_gk["end_x"].between(17, 33.3, inclusive="both") & ~six_yard_box_reception & ~penalty_area_reception & ~wide_of_box_reception
-    middle_third_reception = is_pass_to_gk & passes_to_gk["end_x"].between(33.3, 66.6, inclusive="both")
-
-    passes_to_gk["pass_reception_location"] = np.select(
-        [six_yard_box_reception, penalty_area_reception, wide_of_box_reception, own_third_reception, middle_third_reception],
-        ["Six Yard Box", "Penalty Area", "Wide of Box", "Own Third", "Middle Third"],
-        default=None,
-    )
+    reception_conditions = [
+        is_pass_to_gk & (passes_to_gk["end_x"] <= 5.8) & passes_to_gk["end_y"].between(36.8, 63.2, inclusive="both"),
+        is_pass_to_gk & (passes_to_gk["end_x"] <= 17) & passes_to_gk["end_y"].between(21.1, 79.9, inclusive="both"),
+        is_pass_to_gk & (passes_to_gk["end_x"] <= 17),
+        is_pass_to_gk & passes_to_gk["end_x"].between(17, 33.3, inclusive="both"),
+        is_pass_to_gk & passes_to_gk["end_x"].between(33.3, 66.6, inclusive="both"),
+    ]
+    passes_to_gk["pass_reception_location"] = np.select(reception_conditions, pass_location_names, default=None)
 
     passes_received = passes_to_gk.groupby("pass_recipient").size().rename("passes_received").reset_index().rename(columns={"pass_recipient": "playerName"})
     average_pass_reception_height = passes_to_gk.groupby("pass_recipient")["end_x"].mean().rename("average_pass_reception_height").reset_index().rename(columns={"pass_recipient": "playerName"})
@@ -315,7 +278,7 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
         .groupby(["pass_recipient", "pass_reception_location"])
         .size()
         .unstack(fill_value=0)
-        .reindex(columns=["Six Yard Box", "Penalty Area", "Wide of Box", "Own Third", "Middle Third"], fill_value=0)
+        .reindex(columns=pass_location_names, fill_value=0)
         .rename(
             columns={
                 "Six Yard Box": "six_yard_box_receptions",
@@ -328,19 +291,13 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
         .reset_index()
         .rename(columns={"pass_recipient": "playerName"})
     )
-
     passes_received = passes_received.merge(average_pass_reception_height, on="playerName", how="left")
     passes_received = passes_received.merge(pass_reception_location_counts, on="playerName", how="left")
     reception_count_cols = ["six_yard_box_receptions", "penalty_area_receptions", "wide_of_box_receptions", "own_third_receptions", "middle_third_receptions"]
-    passes_received = add_missing_columns(passes_received, reception_count_cols)
+    passes_received = ensure_columns(passes_received, reception_count_cols)
     passes_received[reception_count_cols] = passes_received[reception_count_cols].fillna(0)
-
     for col in reception_count_cols:
-        passes_received[f"{col}_pct"] = np.where(
-            passes_received["passes_received"].gt(0),
-            passes_received[col] / passes_received["passes_received"],
-            np.nan,
-        )
+        passes_received[f"{col}_pct"] = safe_divide(passes_received[col], passes_received["passes_received"])
 
     playing_gk_stats = (
         df.groupby("playing_GK")
@@ -362,16 +319,16 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
     goalie_stats = goalie_stats.merge(minutes_played, on="playerName", how="left")
     goalie_stats["minutes_played"] = pd.to_numeric(goalie_stats["minutes_played"], errors="coerce").fillna(0)
 
-    goalie_stats["attempted_passes_per_90"] = (goalie_stats["attempted_passes"] / goalie_stats["minutes_played"]) * 90
-    goalie_stats["passes_received_per_90"] = (goalie_stats["passes_received"] / goalie_stats["minutes_played"]) * 90
-    goalie_stats["goals_conceded_per_90"] = (goalie_stats["goals_conceded"] / goalie_stats["minutes_played"]) * 90
+    goalie_stats["attempted_passes_per_90"] = safe_divide(goalie_stats["attempted_passes"], goalie_stats["minutes_played"]) * 90
+    goalie_stats["passes_received_per_90"] = safe_divide(goalie_stats["passes_received"], goalie_stats["minutes_played"]) * 90
+    goalie_stats["goals_conceded_per_90"] = safe_divide(goalie_stats["goals_conceded"], goalie_stats["minutes_played"]) * 90
     goalie_stats["goals_prevented"] = goalie_stats["expected_goals_on_target"] - goalie_stats["goals_conceded"]
-    goalie_stats["goals_prevented_per_90"] = (goalie_stats["goals_prevented"] / goalie_stats["minutes_played"]) * 90
-    goalie_stats["cross_intervention_rate"] = goalie_stats["attempted_claim_punch"] / goalie_stats["gettable_crosses"]
-    goalie_stats["true_save%"] = 1 - (goalie_stats["goals_conceded"] / goalie_stats["shots_on_target"])
-    goalie_stats["big_chance_save%"] = goalie_stats["big_chances_saved"] / goalie_stats["big_chances_faced"]
-    goalie_stats["errors_per_90"] = (goalie_stats["errors"] / goalie_stats["minutes_played"]) * 90
-    goalie_stats["keeper_sweeper_per_90"] = (goalie_stats["keeper_sweeper"] / goalie_stats["minutes_played"]) * 90
+    goalie_stats["goals_prevented_per_90"] = safe_divide(goalie_stats["goals_prevented"], goalie_stats["minutes_played"]) * 90
+    goalie_stats["cross_intervention_rate"] = safe_divide(goalie_stats["attempted_claim_punch"], goalie_stats["gettable_crosses"])
+    goalie_stats["true_save%"] = 1 - safe_divide(goalie_stats["goals_conceded"], goalie_stats["shots_on_target"])
+    goalie_stats["big_chance_save%"] = safe_divide(goalie_stats["big_chances_saved"], goalie_stats["big_chances_faced"])
+    goalie_stats["errors_per_90"] = safe_divide(goalie_stats["errors"], goalie_stats["minutes_played"]) * 90
+    goalie_stats["keeper_sweeper_per_90"] = safe_divide(goalie_stats["keeper_sweeper"], goalie_stats["minutes_played"]) * 90
     goalie_stats = goalie_stats.replace([np.inf, -np.inf], np.nan)
     goalie_stats = goalie_stats[goalie_stats["minutes_played"] >= minute_threshold].reset_index(drop=True)
 
@@ -412,8 +369,7 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
         "errors_per_90",
         "keeper_sweeper_per_90",
     ]
-
-    inverted_cols = ["errors_per_90", "goals_conceded_per_90"]
+    inverted_cols = {"errors_per_90", "goals_conceded_per_90"}
     for col in percentile_cols:
         goalie_stats[f"{col}_percentile"] = goalie_stats[col].rank(pct=True, ascending=col not in inverted_cols) * 100
 
@@ -423,7 +379,6 @@ def build_goalie_stats(matchlog, playerlog, minute_threshold):
 def make_pizza(goalie_stats, player_name, title, pizza_cols, params, slice_colors, text_colors, league_name, season_name):
     player_row = goalie_stats.loc[goalie_stats["playerName"].eq(player_name)].iloc[0]
     values = player_row[pizza_cols].fillna(0).round(0).astype(int).tolist()
-
     font_normal = FontProperties()
     font_bold = FontProperties(weight="bold")
     font_italic = FontProperties(style="italic")
@@ -437,7 +392,6 @@ def make_pizza(goalie_stats, player_name, title, pizza_cols, params, slice_color
         other_circle_lw=0,
         inner_circle_size=20,
     )
-
     fig, _ = baker.make_pizza(
         values,
         figsize=(8, 8.5),
@@ -456,137 +410,106 @@ def make_pizza(goalie_stats, player_name, title, pizza_cols, params, slice_color
             "bbox": {"edgecolor": "#000000", "facecolor": "cornflowerblue", "boxstyle": "round,pad=0.2", "lw": 1},
         },
     )
-
-    fig.text(0.515, 0.975, f"{player_name} - GK Percentile Rank (0-100) - {title}", size=16, ha="center", fontproperties=font_bold, color="#000000")
-    fig.text(0.515, 0.953, f"Compared against other {league_name} goalkeepers | {season_name}", size=13, ha="center", fontproperties=font_bold, color="#000000")
-    fig.text(0.05, 0.02, f"Data from Opta | Metrics are per 90 unless stated | Minimum {MINUTE_THRESHOLD} mins played", size=9, fontproperties=font_italic, color="#000000", ha="left")
+    fig.text(0.515, 0.975, f"{player_name} - GK Percentile Rank (0-100) - {title}", size=16, ha="center", fontproperties=font_bold)
+    fig.text(0.515, 0.953, f"Compared against other {league_name} goalkeepers | {season_name}", size=13, ha="center", fontproperties=font_bold)
+    fig.text(0.05, 0.02, f"Data from Opta | Metrics are per 90 unless stated | Minimum {MINUTE_THRESHOLD} mins played", size=9, fontproperties=font_italic, ha="left")
     return fig
 
 
-KEEPING_CHART = {
-    "title": "Keeping",
-    "pizza_cols": [
-        "keeper_sweeper_per_90_percentile",
-        "claim_punch_success_percentile",
-        "cross_intervention_rate_percentile",
-        "errors_per_90_percentile",
-        "goals_conceded_per_90_percentile",
-        "goals_prevented_per_90_percentile",
-        "true_save%_percentile",
-        "big_chance_save%_percentile",
-    ],
-    "params": [
-        "Keeper Sweeper",
-        "Claim/Punch\nSuccess",
-        "Cross Intervention\nRate",
-        "Errors",
-        "Goals Conceded",
-        "Goals Prevented",
-        "True Save %",
-        "Big Chance Save %",
-    ],
-    "slice_colors": ["red"] * 4 + ["#63ace3"] * 4,
-    "text_colors": ["#000000"] * 8,
-}
-
-PASSING_CHART = {
-    "title": "Passing",
-    "pizza_cols": [
-        "attempted_passes_per_90_percentile",
-        "pass_completion_percentile",
-        "pass_15_pct_percentile",
-        "pass_15to30_pct_percentile",
-        "pass_30to45_pct_percentile",
-        "pass_45_plus_pct_percentile",
-        "passes_to_cb_pct_percentile",
-        "passes_to_fb_pct_percentile",
-        "passes_to_cm_pct_percentile",
-        "passes_end_wide_right_pct_percentile",
-        "passes_end_centre_right_pct_percentile",
-        "passes_end_centre_pct_percentile",
-        "passes_end_centre_left_pct_percentile",
-        "passes_end_wide_left_pct_percentile",
-    ],
-    "params": [
-        "Attempted Passes",
-        "Pass Completion %",
-        "Passes Completed\nShort",
-        "Passes Completed\n15-30yds",
-        "Passes Completed\n30-45yds",
-        "Passes Completed\nLong",
-        "Passes to CBs",
-        "Passes to FBs",
-        "Passes to CMs",
-        "Passes to\nWide Right",
-        "Passes to\nCentre Right",
-        "Passes to\nCentre",
-        "Passes to\nCentre Left",
-        "Passes to\nWide Left",
-    ],
-    "slice_colors": ["red"] * 6 + ["#63ace3"] * 3 + ["#2f316a"] * 5,
-    "text_colors": ["#000000"] * 9 + ["white"] * 5,
-}
-
-RECEIVING_CHART = {
-    "title": "Receiving",
-    "pizza_cols": [
-        "passes_received_per_90_percentile",
-        "average_pass_reception_height_percentile",
-        "six_yard_box_receptions_pct_percentile",
-        "penalty_area_receptions_pct_percentile",
-        "wide_of_box_receptions_pct_percentile",
-        "own_third_receptions_pct_percentile",
-        "middle_third_receptions_pct_percentile",
-    ],
-    "params": [
-        "Passes Received",
-        "Average Reception\nHeight",
-        "Received in\n6 Yard Box",
-        "Received in\nPenalty Box",
-        "Received\nWide of Box",
-        "Received in\nOwn Third",
-        "Received in\nMiddle Third",
-    ],
-    "slice_colors": ["red"] * 2 + ["#63ace3"] * 5,
-    "text_colors": ["#000000"] * 7,
-}
+CHARTS = [
+    {
+        "tab": "Keeping",
+        "title": "Keeping",
+        "pizza_cols": [
+            "keeper_sweeper_per_90_percentile",
+            "claim_punch_success_percentile",
+            "cross_intervention_rate_percentile",
+            "errors_per_90_percentile",
+            "goals_conceded_per_90_percentile",
+            "goals_prevented_per_90_percentile",
+            "true_save%_percentile",
+            "big_chance_save%_percentile",
+        ],
+        "params": ["Keeper Sweeper", "Claim/Punch\nSuccess", "Cross Intervention\nRate", "Errors", "Goals Conceded", "Goals Prevented", "True Save %", "Big Chance Save %"],
+        "slice_colors": ["red"] * 4 + ["#63ace3"] * 4,
+        "text_colors": ["#000000"] * 8,
+    },
+    {
+        "tab": "Passing",
+        "title": "Passing",
+        "pizza_cols": [
+            "attempted_passes_per_90_percentile",
+            "pass_completion_percentile",
+            "pass_15_pct_percentile",
+            "pass_15to30_pct_percentile",
+            "pass_30to45_pct_percentile",
+            "pass_45_plus_pct_percentile",
+            "passes_to_cb_pct_percentile",
+            "passes_to_fb_pct_percentile",
+            "passes_to_cm_pct_percentile",
+            "passes_end_wide_right_pct_percentile",
+            "passes_end_centre_right_pct_percentile",
+            "passes_end_centre_pct_percentile",
+            "passes_end_centre_left_pct_percentile",
+            "passes_end_wide_left_pct_percentile",
+        ],
+        "params": ["Attempted Passes", "Pass Completion %", "Passes Completed\nShort", "Passes Completed\n15-30yds", "Passes Completed\n30-45yds", "Passes Completed\nLong", "Passes to CBs", "Passes to FBs", "Passes to CMs", "Passes to\nWide Right", "Passes to\nCentre Right", "Passes to\nCentre", "Passes to\nCentre Left", "Passes to\nWide Left"],
+        "slice_colors": ["red"] * 6 + ["#63ace3"] * 3 + ["#2f316a"] * 5,
+        "text_colors": ["#000000"] * 9 + ["white"] * 5,
+    },
+    {
+        "tab": "Receiving",
+        "title": "Receiving",
+        "pizza_cols": [
+            "passes_received_per_90_percentile",
+            "average_pass_reception_height_percentile",
+            "six_yard_box_receptions_pct_percentile",
+            "penalty_area_receptions_pct_percentile",
+            "wide_of_box_receptions_pct_percentile",
+            "own_third_receptions_pct_percentile",
+            "middle_third_receptions_pct_percentile",
+        ],
+        "params": ["Passes Received", "Average Reception\nHeight", "Received in\n6 Yard Box", "Received in\nPenalty Box", "Received\nWide of Box", "Received in\nOwn Third", "Received in\nMiddle Third"],
+        "slice_colors": ["red"] * 2 + ["#63ace3"] * 5,
+        "text_colors": ["#000000"] * 7,
+    },
+]
 
 
 st.title("MFC Goalie Test")
 
-available_files = discover_data_files(DATA_ROOT)
+available_files = discover_data_files(APP_ROOT)
 if not available_files:
-    st.error(
-        "No matching data files were found. Upload files named like "
-        "`DEN1_2526.parquet` and `DEN1_2526_playertotal.xlsx` into this app's GitHub repo."
-    )
+    st.error("No matching files found. Upload files named like `DEN1_2526.parquet` and `DEN1_2526_playertotal.xlsx`.")
     st.stop()
 
-league_options = sorted({item["league"] for item in available_files}, key=lambda code: _league_label(code))
-league = st.selectbox("League", league_options, format_func=lambda code: f"{_league_label(code)} ({code})")
+league_options = sorted({item["league"] for item in available_files}, key=league_label)
+league = st.selectbox("League", league_options, format_func=lambda code: f"{league_label(code)} ({code})")
 
-season_options = sorted(
-    {item["season"] for item in available_files if item["league"] == league},
-    key=lambda code: (_season_label(code), code),
-)
-season = st.selectbox("Season", season_options, format_func=lambda code: f"{_season_label(code)} ({code})")
+season_options = sorted({item["season"] for item in available_files if item["league"] == league}, key=lambda code: (season_label(code), code))
+season = st.selectbox("Season", season_options, format_func=lambda code: f"{season_label(code)} ({code})")
 
 selected_files = next(item for item in available_files if item["league"] == league and item["season"] == season)
-league_name = _league_label(league)
-season_name = _season_label(season)
-
 goalie_stats = build_goalie_stats(str(selected_files["matchlog"]), str(selected_files["playerlog"]), MINUTE_THRESHOLD)
 
 if goalie_stats.empty:
-    st.warning(f"No goalkeepers met the {MINUTE_THRESHOLD} minute threshold for {league_name} {season_name}.")
+    st.warning(f"No goalkeepers met the {MINUTE_THRESHOLD} minute threshold for {league_label(league)} {season_label(season)}.")
     st.stop()
 
-player_names = goalie_stats["playerName"].dropna().sort_values().tolist()
-player_name = st.selectbox("Goalkeeper", player_names)
+player_name = st.selectbox("Goalkeeper", goalie_stats["playerName"].dropna().sort_values().tolist())
 
-tabs = st.tabs(["Keeping", "Passing", "Receiving"])
-for tab, chart in zip(tabs, [KEEPING_CHART, PASSING_CHART, RECEIVING_CHART]):
+for tab, chart in zip(st.tabs([chart["tab"] for chart in CHARTS]), CHARTS):
     with tab:
-        fig = make_pizza(goalie_stats, player_name, league_name=league_name, season_name=season_name, **chart)
+        fig = make_pizza(
+            goalie_stats,
+            player_name,
+            chart["title"],
+            chart["pizza_cols"],
+            chart["params"],
+            chart["slice_colors"],
+            chart["text_colors"],
+            league_label(league),
+            season_label(season),
+        )
         st.pyplot(fig, use_container_width=False)
         plt.close(fig)
