@@ -394,7 +394,7 @@ def make_pizza(goalie_stats, player_name, title, pizza_cols, params, slice_color
     )
     fig, _ = baker.make_pizza(
         values,
-        figsize=(8, 8.5),
+        figsize=(5.8, 6.2),
         color_blank_space="same",
         slice_colors=slice_colors,
         value_colors=text_colors,
@@ -440,7 +440,7 @@ CHARTS = [
         "pizza_cols": [
             "attempted_passes_per_90_percentile",
             "pass_completion_percentile",
-            "passing_threat_per_10_passes_percentile",
+            "passing_threat_per_10_passes",
             "pass_15_pct_percentile",
             "pass_15to30_pct_percentile",
             "pass_30to45_pct_percentile",
@@ -512,5 +512,7 @@ for tab, chart in zip(st.tabs([chart["tab"] for chart in CHARTS]), CHARTS):
             league_label(league),
             season_label(season),
         )
-        st.pyplot(fig, use_container_width=False)
+        left, centre, right = st.columns([1, 2, 1])
+        with centre:
+            st.pyplot(fig, use_container_width=True)
         plt.close(fig)
