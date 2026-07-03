@@ -40,6 +40,7 @@ LEAGUE_DICT = {
     "SOU1": "South African Premier",
     "SAU1": "Saudi Pro League",
     "TUR1": "Superlig",
+    "POL1": "Polish Ekstraklasa",
 }
 
 SEASON_DICT = {
