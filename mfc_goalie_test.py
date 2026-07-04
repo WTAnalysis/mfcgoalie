@@ -501,7 +501,9 @@ if goalie_stats.empty:
 
 player_name = st.selectbox("Goalkeeper", goalie_stats["playerName"].dropna().sort_values().tolist())
 
-for tab, chart in zip(st.tabs([chart["tab"] for chart in CHARTS]), CHARTS):
+tabs = st.tabs([chart["tab"] for chart in CHARTS] + ["Percentile Table"])
+
+for tab, chart in zip(tabs[: len(CHARTS)], CHARTS):
     with tab:
         fig = make_pizza(
             goalie_stats,
@@ -520,3 +522,45 @@ for tab, chart in zip(st.tabs([chart["tab"] for chart in CHARTS]), CHARTS):
         plt.close(fig)
         del fig
         gc.collect()
+
+with tabs[-1]:
+    search_name = st.text_input(
+        "Search goalkeeper",
+        placeholder="Type a goalkeeper name",
+    )
+
+    table_columns = ["playerName"]
+    display_names = {"playerName": "Goalkeeper"}
+
+    for chart in CHARTS:
+        for column, label in zip(chart["pizza_cols"], chart["params"]):
+            if column not in table_columns:
+                table_columns.append(column)
+                clean_label = label.replace("\n", " ")
+                display_names[column] = f'{chart["tab"]}: {clean_label}'
+
+    percentile_table = goalie_stats[table_columns].copy()
+    percentile_columns = [col for col in table_columns if col != "playerName"]
+    percentile_table[percentile_columns] = (
+        percentile_table[percentile_columns].round(0).astype("Int64")
+    )
+
+    if search_name:
+        percentile_table = percentile_table[
+            percentile_table["playerName"].str.contains(
+                search_name,
+                case=False,
+                na=False,
+            )
+        ]
+
+    percentile_table = percentile_table.rename(columns=display_names).sort_values(
+        "Goalkeeper"
+    )
+
+    st.dataframe(
+        percentile_table,
+        hide_index=True,
+        use_container_width=True,
+        height=600,
+    )
