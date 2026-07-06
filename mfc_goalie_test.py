@@ -25,6 +25,7 @@ LEAGUE_DICT = {
     "BEL1": "Pro League",
     "DEN1": "Superliga",
     "EGY1": "Egyptian Premier League",
+    "FIN1": "Finnish Veikkausliiga",
     "GRE1": "Greek Superleague",
     "GER1": "Bundesliga",
     "GER2": "2. Bundesliga",
