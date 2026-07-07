@@ -13,6 +13,8 @@ st.set_page_config(page_title="MFC Goalie Test", layout="wide")
 
 APP_ROOT = Path(__file__).resolve().parent
 MINUTE_THRESHOLD = 360
+PLAYER_A_COLOR = "#9E9E9E"
+PLAYER_B_COLOR = "#E53935"
 
 LEAGUE_DICT = {
     "ENG1": "Premier League",
@@ -104,7 +106,7 @@ def load_source_data(matchlog, playerlog):
     return pd.read_parquet(matchlog), pd.read_excel(playerlog)
 
 
-@st.cache_data(show_spinner="Building goalkeeper stats...", max_entries=1, ttl=600)
+@st.cache_data(show_spinner="Building goalkeeper stats...", max_entries=2, ttl=600)
 def build_goalie_stats(matchlog, playerlog, minute_threshold):
     df, player_totals = load_source_data(matchlog, playerlog)
     df = df.copy()
@@ -418,6 +420,83 @@ def make_pizza(goalie_stats, player_name, title, pizza_cols, params, slice_color
     return fig
 
 
+def pizza_values(goalie_stats, player_name, pizza_cols):
+    player_row = goalie_stats.loc[goalie_stats["playerName"].eq(player_name)].iloc[0]
+    return player_row[pizza_cols].fillna(0).round(0).astype(int).tolist()
+
+
+def make_comparison_pizza(
+    chart,
+    goalie_stats_a,
+    player_name_a,
+    goalie_stats_b,
+    player_name_b,
+    league_name_a,
+    season_name_a,
+    league_name_b,
+    season_name_b,
+):
+    values_a = pizza_values(goalie_stats_a, player_name_a, chart["pizza_cols"])
+    values_b = pizza_values(goalie_stats_b, player_name_b, chart["pizza_cols"])
+    font_normal = FontProperties()
+    font_bold = FontProperties(weight="bold")
+    font_italic = FontProperties(style="italic")
+
+    baker = PyPizza(
+        params=chart["params"],
+        background_color="#F2F2F2",
+        straight_line_color="#D9D9D9",
+        straight_line_lw=1,
+        last_circle_lw=0,
+        other_circle_lw=0,
+        inner_circle_size=20,
+    )
+    fig, _ = baker.make_pizza(
+        values_a,
+        compare_values=values_b,
+        figsize=(6.8, 7.2),
+        color_blank_space="same",
+        slice_colors=[PLAYER_A_COLOR] * len(chart["pizza_cols"]),
+        compare_colors=[PLAYER_B_COLOR] * len(chart["pizza_cols"]),
+        value_colors=["#000000"] * len(chart["pizza_cols"]),
+        compare_value_colors=["#FFFFFF"] * len(chart["pizza_cols"]),
+        value_bck_colors=["#D6D6D6"] * len(chart["pizza_cols"]),
+        compare_value_bck_colors=[PLAYER_B_COLOR] * len(chart["pizza_cols"]),
+        blank_alpha=0.28,
+        kwargs_slices={"edgecolor": "#F2F2F2", "linewidth": 1, "alpha": 0.48, "zorder": 2},
+        kwargs_compare={"edgecolor": "#F2F2F2", "linewidth": 1, "alpha": 0.72, "zorder": 3},
+        kwargs_params={"color": "#000000", "fontsize": 10, "fontproperties": font_normal, "va": "center"},
+        kwargs_values={
+            "fontsize": 9,
+            "fontproperties": font_normal,
+            "bbox": {"edgecolor": "#555555", "boxstyle": "round,pad=0.2", "lw": 0.8},
+        },
+        kwargs_compare_values={
+            "fontsize": 9,
+            "fontproperties": font_normal,
+            "bbox": {"edgecolor": "#7A0000", "boxstyle": "round,pad=0.2", "lw": 0.8},
+        },
+        param_location=112.5,
+    )
+    fig.text(0.515, 0.975, f"GK Percentile Rank (0-100) - {chart['title']}", size=14, ha="center", fontproperties=font_bold)
+    fig.text(0.46, 0.948, player_name_a, ha="right", size=11, color="#333333", fontproperties=font_bold)
+    fig.text(0.515, 0.948, "vs", ha="center", size=10, color="#555555", fontproperties=font_bold)
+    fig.text(0.57, 0.948, player_name_b, ha="left", size=11, color=PLAYER_B_COLOR, fontproperties=font_bold)
+    fig.text(
+        0.515,
+        0.026,
+        f"{league_name_a} {season_name_a} | {league_name_b} {season_name_b}",
+        size=8.5,
+        ha="center",
+        color="#555555",
+        fontproperties=font_normal,
+    )
+    fig.text(0.05, 0.008, f"Data from Opta | Percentile rank within each selected league | Minimum {MINUTE_THRESHOLD} mins played", size=8.5, fontproperties=font_italic, ha="left")
+    fig.subplots_adjust(top=0.88, bottom=0.08, left=0.08, right=0.92)
+    fig.set_facecolor("#F2F2F2")
+    return fig
+
+
 CHARTS = [
     {
         "tab": "Keeping",
@@ -501,7 +580,7 @@ if goalie_stats.empty:
 
 player_name = st.selectbox("Goalkeeper", goalie_stats["playerName"].dropna().sort_values().tolist())
 
-tabs = st.tabs([chart["tab"] for chart in CHARTS] + ["Percentile Table"])
+tabs = st.tabs([chart["tab"] for chart in CHARTS] + ["Compare", "Percentile Table"])
 
 for tab, chart in zip(tabs[: len(CHARTS)], CHARTS):
     with tab:
@@ -522,6 +601,98 @@ for tab, chart in zip(tabs[: len(CHARTS)], CHARTS):
         plt.close(fig)
         del fig
         gc.collect()
+
+with tabs[len(CHARTS)]:
+    selector_cols = st.columns(3)
+    comparison_league_options = league_options
+    default_comparison_league_index = next(
+        (
+            idx
+            for idx, option in enumerate(comparison_league_options)
+            if option != league
+        ),
+        0,
+    )
+
+    with selector_cols[0]:
+        comparison_league = st.selectbox(
+            "Comparison League",
+            comparison_league_options,
+            index=default_comparison_league_index,
+            format_func=lambda code: f"{league_label(code)} ({code})",
+            key="comparison_league",
+        )
+
+    comparison_season_options = sorted(
+        {
+            item["season"]
+            for item in available_files
+            if item["league"] == comparison_league
+        },
+        key=lambda code: (season_label(code), code),
+    )
+    default_comparison_season_index = next(
+        (
+            idx
+            for idx, option in enumerate(comparison_season_options)
+            if option == season
+        ),
+        0,
+    )
+
+    with selector_cols[1]:
+        comparison_season = st.selectbox(
+            "Comparison Season",
+            comparison_season_options,
+            index=default_comparison_season_index,
+            format_func=lambda code: f"{season_label(code)} ({code})",
+            key="comparison_season",
+        )
+
+    comparison_files = next(
+        item
+        for item in available_files
+        if item["league"] == comparison_league and item["season"] == comparison_season
+    )
+    comparison_goalie_stats = build_goalie_stats(
+        str(comparison_files["matchlog"]),
+        str(comparison_files["playerlog"]),
+        MINUTE_THRESHOLD,
+    )
+
+    if comparison_goalie_stats.empty:
+        st.warning(
+            f"No goalkeepers met the {MINUTE_THRESHOLD} minute threshold for "
+            f"{league_label(comparison_league)} {season_label(comparison_season)}."
+        )
+    else:
+        with selector_cols[2]:
+            comparison_player_name = st.selectbox(
+                "Comparison Goalkeeper",
+                comparison_goalie_stats["playerName"].dropna().sort_values().tolist(),
+                key="comparison_goalkeeper",
+            )
+
+        comparison_tabs = st.tabs([chart["tab"] for chart in CHARTS])
+        for comparison_tab, chart in zip(comparison_tabs, CHARTS):
+            with comparison_tab:
+                fig = make_comparison_pizza(
+                    chart,
+                    goalie_stats,
+                    player_name,
+                    comparison_goalie_stats,
+                    comparison_player_name,
+                    league_label(league),
+                    season_label(season),
+                    league_label(comparison_league),
+                    season_label(comparison_season),
+                )
+                left, centre, right = st.columns([1, 3, 1])
+                with centre:
+                    st.pyplot(fig, use_container_width=True)
+                plt.close(fig)
+                del fig
+                gc.collect()
 
 with tabs[-1]:
     search_name = st.text_input(
