@@ -822,8 +822,17 @@ def season_shot_summary(shots):
     on_target = saves | goals
     attempts = int(on_target.sum())
     save_pct = 100 * saves.sum() / attempts if attempts else np.nan
-    xgot = shots.loc[on_target, "expectedGoalsOnTarget"]
-    prevented = xgot.sum() - goals.sum() if len(xgot) and xgot.notna().all() else np.nan
+    shotblocked = pd.to_numeric(
+        shots.get("shotblocked", pd.Series(np.nan, index=shots.index)), errors="coerce"
+    )
+    expected_goals = pd.to_numeric(shots["expectedGoals"], errors="coerce")
+    qualifying_shots = on_target & shotblocked.eq(0) & expected_goals.notna()
+    xgot = shots.loc[qualifying_shots, "expectedGoalsOnTarget"]
+    qualifying_goals = (goals & qualifying_shots).sum()
+    prevented = (
+        xgot.sum() - qualifying_goals
+        if len(xgot) and xgot.notna().all() else np.nan
+    )
     return save_pct, int(goals.sum()), prevented
 
 
@@ -901,7 +910,7 @@ def render_season_shots(files, name, league_code, season_code):
     if "onGoalShot" not in shots:
         st.caption("Add onGoalShot to the event file to show goal-face placement.")
     if pd.isna(prevented):
-        st.caption("Goals Prevented requires xGOT for every saved attempt and goal.")
+        st.caption("Goals Prevented requires xGOT for every qualifying save and goal (shotblocked = 0 and recorded xG).")
     for figure in make_season_shot_maps(shots):
         st.pyplot(figure, use_container_width=True)
         plt.close(figure)
@@ -1081,7 +1090,7 @@ if show_shot_maps:
         st.caption(
             "Full-season shots assigned through playing_GK. "
             "Save % = saves / (saves + goals conceded). "
-            "Goals Prevented = xGOT faced − goals conceded. "
+            "Goals Prevented uses shots with shotblocked = 0 and recorded xG: xGOT faced − goals in those shots. "
             "Pitch marker size represents xG; goal-face marker size represents xGOT."
         )
         shot_columns = st.columns(2)
