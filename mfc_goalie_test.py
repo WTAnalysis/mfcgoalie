@@ -115,9 +115,24 @@ def safe_divide(numerator, denominator):
     return np.where(pd.Series(denominator).gt(0), numerator / denominator, np.nan)
 
 
+
+def read_event_parquet(matchlog, columns=None):
+    # Read a single file directly so repeated export headers can be removed.
+    table = pq.ParquetFile(matchlog).read()
+    selected_indices = []
+    seen = set()
+    for index, name in enumerate(table.column_names):
+        if name in seen:
+            continue
+        seen.add(name)
+        if columns is None or name in columns:
+            selected_indices.append(index)
+    return table.select(selected_indices).to_pandas()
+
+
 @st.cache_data(show_spinner=False, max_entries=1, ttl=600)
 def load_source_data(matchlog, playerlog):
-    return pd.read_parquet(matchlog), pd.read_excel(playerlog)
+    return read_event_parquet(matchlog), pd.read_excel(playerlog)
 
 
 @st.cache_data(show_spinner="Building goalkeeper stats...", max_entries=2, ttl=600)
@@ -787,7 +802,7 @@ def load_season_shots(matchlog):
         "playing_GK", "typeId", "x", "y", "expectedGoals",
         "expectedGoalsOnTarget", "isBlocked", "onGoalShot", "isOwnGoal",
     ]
-    events = pd.read_parquet(matchlog, columns=[col for col in columns if col in available])
+    events = read_event_parquet(matchlog, columns=[col for col in columns if col in available])
     shots = events.loc[events["typeId"].isin(["Attempt Saved", "Goal", "Miss", "Post"])].copy()
     for column in ("x", "y", "expectedGoals", "expectedGoalsOnTarget"):
         shots[column] = pd.to_numeric(
