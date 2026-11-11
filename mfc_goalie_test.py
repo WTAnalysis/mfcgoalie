@@ -1,12 +1,15 @@
 from pathlib import Path
 import gc
+import ast
+import json
+import pyarrow.parquet as pq
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
 from matplotlib.font_manager import FontProperties
-from mplsoccer import PyPizza
+from mplsoccer import PyPizza, VerticalPitch
 
 
 st.set_page_config(page_title="MFC Goalie Test", layout="wide")
@@ -24,6 +27,7 @@ LEAGUE_DICT = {
     "SCO1": "Scottish Premiership",
     "AUS1": "A-League",
     "BRA1": "Brasileirao",
+    "BRA2": "Brazilian Serie B",
     "BEL1": "Pro League",
     "DEN1": "Superliga",
     "EGY1": "Egyptian Premier League",
@@ -568,6 +572,344 @@ CHARTS = [
 ]
 
 
+def parse_on_goal_shot(value):
+    """Convert an Opta onGoalShot value into a dictionary."""
+
+    if isinstance(value, dict):
+        return value
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    if not isinstance(value, str):
+        return None
+
+    value = value.strip()
+
+    if not value:
+        return None
+
+    try:
+        parsed = json.loads(
+            value.replace("'", '"')
+        )
+
+        if isinstance(parsed, dict):
+            return parsed
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    try:
+        parsed = ast.literal_eval(value)
+
+        if isinstance(parsed, dict):
+            return parsed
+    except (ValueError, SyntaxError):
+        pass
+
+    return None
+
+def boolean_series(values):
+    """Safely interpret True/False, 1/0 and yes/no values."""
+
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False)
+
+    numeric_values = pd.to_numeric(
+        values,
+        errors="coerce",
+    )
+
+    text_values = (
+        values.astype(str)
+        .str.strip()
+        .str.casefold()
+    )
+
+    return (
+        numeric_values.fillna(0).ne(0)
+        | text_values.isin(
+            ["true", "yes", "y", "blocked"]
+        )
+    )
+
+def keeper_shot_locations(shots_faced):
+    shots_faced = shots_faced.copy()
+    if "onGoalShot" not in shots_faced:
+        shots_faced["onGoalShot"] = None
+    shots_faced["onGoalShot"] = (
+        shots_faced["onGoalShot"]
+        .apply(parse_on_goal_shot)
+    )
+
+    shots_faced = shots_faced.loc[
+        shots_faced["onGoalShot"].notna()
+    ].copy()
+
+    shots_faced["goal_x"] = (
+        shots_faced["onGoalShot"]
+        .apply(
+            lambda value: value.get("x")
+            if isinstance(value, dict)
+            else np.nan
+        )
+    )
+
+    shots_faced["goal_y"] = (
+        shots_faced["onGoalShot"]
+        .apply(
+            lambda value: value.get("y")
+            if isinstance(value, dict)
+            else np.nan
+        )
+    )
+
+    shots_faced["zoomratio"] = (
+        shots_faced["onGoalShot"]
+        .apply(
+            lambda value: value.get(
+                "zoomRatio",
+                1,
+            )
+            if isinstance(value, dict)
+            else 1
+        )
+    )
+
+    for column in [
+        "goal_x",
+        "goal_y",
+        "zoomratio",
+        "expectedGoalsOnTarget",
+    ]:
+        shots_faced[column] = pd.to_numeric(
+            shots_faced[column],
+            errors="coerce",
+        )
+
+    shots_faced["zoomratio"] = (
+        shots_faced["zoomratio"].fillna(1)
+    )
+
+    # Coordinate corrections from the original goal-placement code.
+    left_mask = (
+        shots_faced["goal_x"] < 0.0001
+    )
+    shots_faced.loc[
+        left_mask,
+        "goal_x",
+    ] = (
+        -0.5
+        * shots_faced.loc[
+            left_mask,
+            "zoomratio",
+        ]
+    )
+
+    high_mask = (
+        shots_faced["goal_y"] > 0.67
+    )
+    shots_faced.loc[
+        high_mask,
+        "goal_y",
+    ] = (
+        0.67
+        + (
+            0.33
+            * shots_faced.loc[
+                high_mask,
+                "zoomratio",
+            ]
+        )
+    )
+
+    if "isBlocked" in shots_faced.columns:
+        blocked_mask = boolean_series(
+            shots_faced["isBlocked"]
+        )
+    else:
+        blocked_mask = pd.Series(
+            False,
+            index=shots_faced.index,
+        )
+
+    saves = shots_faced.loc[
+        shots_faced["typeId"].eq(
+            "Attempt Saved"
+        )
+        & ~blocked_mask
+    ].copy()
+
+    goals = shots_faced.loc[
+        shots_faced["typeId"].eq(
+            "Goal"
+        )
+    ].copy()
+
+    return saves, goals
+
+def draw_goal(goal, name, faced=False):
+    title = "Shots Faced on Goal" if faced else "Shot Locations on Goal"
+    goal.set_title(f"{name} - {title}", color="white")
+    goal.set_facecolor(PitchColor)
+    goal.set(xlim=(-0.18, 2.18), ylim=(-0.10, 0.76), xticks=[], yticks=[])
+    # Match the data-unit proportions of the main goalkeeper overview.
+    main_goal_aspect = (0.255 * 10) / (0.380 * 14) * (2.04 / 0.70)
+    goal.set_aspect(main_goal_aspect, adjustable="box")
+    for spine in goal.spines.values():
+        spine.set_visible(False)
+    goal.plot([0, 0, 2, 2], [0, 0.66, 0.66, 0], color="black", linewidth=2.4)
+    goal.vlines(np.arange(0.2, 2, 0.2), 0, 0.66, color="grey", linewidth=0.5)
+    goal.hlines(np.arange(0.0825, 0.66, 0.0825), 0, 2, color="grey", linewidth=0.5)
+
+
+BackgroundColor = "#381d54"
+PitchColor = "#f5f6fc"
+PitchLineColor = "black"
+SaveColor = "#20b26b"
+GoalColor = "#e63946"
+
+
+@st.cache_data(show_spinner=False, max_entries=2, ttl=600)
+def load_season_shots(matchlog):
+    available = set(pq.ParquetFile(matchlog).schema_arrow.names)
+    required = {"playing_GK", "typeId", "x", "y"}
+    missing = required - available
+    if missing:
+        raise ValueError("Missing shot-map columns: " + ", ".join(sorted(missing)))
+    columns = [
+        "playing_GK", "typeId", "x", "y", "expectedGoals",
+        "expectedGoalsOnTarget", "isBlocked", "onGoalShot", "isOwnGoal",
+    ]
+    events = pd.read_parquet(matchlog, columns=[col for col in columns if col in available])
+    shots = events.loc[events["typeId"].isin(["Attempt Saved", "Goal", "Miss", "Post"])].copy()
+    for column in ("x", "y", "expectedGoals", "expectedGoalsOnTarget"):
+        shots[column] = pd.to_numeric(
+            shots.get(column, pd.Series(np.nan, index=shots.index)), errors="coerce"
+        )
+    return shots
+
+
+def season_shot_summary(shots):
+    blocked = boolean_series(shots.get("isBlocked", pd.Series(False, index=shots.index)))
+    saves = shots["typeId"].eq("Attempt Saved") & ~blocked
+    goals = shots["typeId"].eq("Goal")
+    on_target = saves | goals
+    attempts = int(on_target.sum())
+    save_pct = 100 * saves.sum() / attempts if attempts else np.nan
+    xgot = shots.loc[on_target, "expectedGoalsOnTarget"]
+    prevented = xgot.sum() - goals.sum() if len(xgot) and xgot.notna().all() else np.nan
+    return save_pct, int(goals.sum()), prevented
+
+
+def make_season_shot_maps(shots):
+    fig, ax = plt.subplots(figsize=(7, 6), facecolor=BackgroundColor)
+    field = VerticalPitch(
+        pitch_type="opta", half=True,
+        pitch_color=PitchColor, line_color=PitchLineColor,
+    )
+    field.draw(ax=ax)
+    ax.set_title("Shot Map", color="white")
+    attempts = shots["typeId"].eq("Attempt Saved")
+    blocked = attempts & (
+        shots["expectedGoalsOnTarget"].eq(0)
+        | boolean_series(shots.get("isBlocked", pd.Series(False, index=shots.index)))
+    )
+    for mask, colour, label in (
+        (attempts & ~blocked, "blue", "On target"),
+        (blocked, "orange", "Blocked"),
+        (shots["typeId"].isin(["Miss", "Post"]), "red", "Off target"),
+        (shots["typeId"].eq("Goal"), "green", "Goal"),
+    ):
+        group = shots.loc[mask]
+        field.scatter(
+            group["x"], group["y"], ax=ax,
+            s=group["expectedGoals"].fillna(0.035).clip(lower=0.01) * 1000,
+            facecolors="none", edgecolors=colour, label=label, zorder=3,
+        )
+    ax.legend(loc="upper left", fontsize=8, framealpha=0.85, markerscale=0.6)
+    fig.tight_layout()
+
+    goal_fig, goal_ax = plt.subplots(figsize=(7, 3.4), facecolor=BackgroundColor)
+    draw_goal(goal_ax, "", faced=True)
+    goal_ax.set_title("On Goal Shot Map", color="white")
+    saves, goals = keeper_shot_locations(shots)
+    for group, marker, colour, label in (
+        (saves, "o", SaveColor, "Saved"),
+        (goals, "*", GoalColor, "Goal conceded"),
+    ):
+        goal_ax.scatter(
+            group["goal_x"], group["goal_y"],
+            s=group["expectedGoalsOnTarget"].fillna(0.035).clip(lower=0.01) * 800,
+            marker=marker, facecolors=colour, edgecolors="white", label=label, zorder=3,
+        )
+    if not shots.empty and not pd.concat([saves, goals])[["goal_x", "goal_y"]].dropna().empty:
+        goal_ax.legend(loc="lower center", fontsize=8)
+    else:
+        goal_ax.text(
+            0.5, 0.15, "No shot placement available",
+            transform=goal_ax.transAxes, ha="center", color=BackgroundColor,
+        )
+    goal_fig.tight_layout()
+    return fig, goal_fig
+
+
+def render_season_shots(files, name, league_code, season_code):
+    st.subheader(name)
+    st.caption(f"{league_label(league_code)} · {season_label(season_code)}")
+    try:
+        season_shots = load_season_shots(str(files["matchlog"]))
+    except ValueError as error:
+        st.warning(str(error))
+        return
+    shots = season_shots.loc[season_shots["playing_GK"].eq(name)].copy()
+    save_pct, conceded, prevented = season_shot_summary(shots)
+    cards = st.columns(3)
+    cards[0].metric("Save %", f"{save_pct:.1f}%" if pd.notna(save_pct) else "—")
+    cards[1].metric("Goals Conceded", conceded)
+    cards[2].metric("Goals Prevented", f"{prevented:.2f}" if pd.notna(prevented) else "—")
+    if shots.empty:
+        st.info("No shots are assigned to this goalkeeper in the selected season.")
+    if "onGoalShot" not in shots:
+        st.caption("Add onGoalShot to the event file to show goal-face placement.")
+    if pd.isna(prevented):
+        st.caption("Goals Prevented requires xGOT for every saved attempt and goal.")
+    for figure in make_season_shot_maps(shots):
+        st.pyplot(figure, use_container_width=True)
+        plt.close(figure)
+
+
+
+def shot_maps_available(selected_files, available_files, league, season, state):
+    comparison_leagues = sorted({item["league"] for item in available_files}, key=league_label)
+    default_league = next((code for code in comparison_leagues if code != league), league)
+    comparison_league = state.get("comparison_league", default_league)
+    if comparison_league not in comparison_leagues:
+        comparison_league = default_league
+    comparison_seasons = sorted(
+        {item["season"] for item in available_files if item["league"] == comparison_league},
+        key=lambda code: (season_label(code), code),
+    )
+    default_season = season if season in comparison_seasons else comparison_seasons[0]
+    comparison_season = state.get("comparison_season", default_season)
+    if comparison_season not in comparison_seasons:
+        comparison_season = default_season
+    comparison_files = next(
+        item for item in available_files
+        if item["league"] == comparison_league and item["season"] == comparison_season
+    )
+    return all(
+        "onGoalShot" in pq.ParquetFile(str(files["matchlog"])).schema_arrow.names
+        for files in (selected_files, comparison_files)
+    )
+
+
 st.title("MFC Goalie Test")
 
 available_files = discover_data_files(APP_ROOT)
@@ -590,7 +932,14 @@ if goalie_stats.empty:
 
 player_name = st.selectbox("Goalkeeper", goalie_stats["playerName"].dropna().sort_values().tolist())
 
-tabs = st.tabs([chart["tab"] for chart in CHARTS] + ["Compare", "Percentile Table"])
+show_shot_maps = shot_maps_available(
+    selected_files, available_files, league, season, st.session_state
+)
+extra_tabs = ["Compare"]
+if show_shot_maps:
+    extra_tabs.append("Shot Maps")
+extra_tabs.append("Percentile Table")
+tabs = st.tabs([chart["tab"] for chart in CHARTS] + extra_tabs)
 
 for tab, chart in zip(tabs[: len(CHARTS)], CHARTS):
     with tab:
@@ -703,6 +1052,28 @@ with tabs[len(CHARTS)]:
                 plt.close(fig)
                 del fig
                 gc.collect()
+
+
+if show_shot_maps:
+    with tabs[len(CHARTS) + 1]:
+        st.caption(
+            "Full-season shots assigned through playing_GK. "
+            "Save % = saves / (saves + goals conceded). "
+            "Goals Prevented = xGOT faced − goals conceded. "
+            "Pitch marker size represents xG; goal-face marker size represents xGOT."
+        )
+        shot_columns = st.columns(2)
+        with shot_columns[0]:
+            render_season_shots(selected_files, player_name, league, season)
+        with shot_columns[1]:
+            if comparison_goalie_stats.empty:
+                st.info("Choose a comparison league and season with eligible goalkeepers in the Compare tab.")
+            else:
+                render_season_shots(
+                    comparison_files, comparison_player_name,
+                    comparison_league, comparison_season,
+                )
+
 
 with tabs[-1]:
     search_name = st.text_input(
