@@ -655,7 +655,11 @@ def boolean_series(values):
     )
 
 def keeper_shot_locations(shots_faced):
-    shots_faced = shots_faced.copy()
+    shotblocked = pd.to_numeric(
+        shots_faced.get("shotblocked", pd.Series(np.nan, index=shots_faced.index)),
+        errors="coerce",
+    )
+    shots_faced = shots_faced.loc[shotblocked.eq(0)].copy()
     if "onGoalShot" not in shots_faced:
         shots_faced["onGoalShot"] = None
     shots_faced["onGoalShot"] = (
@@ -800,7 +804,7 @@ def load_season_shots(matchlog):
         raise ValueError("Missing shot-map columns: " + ", ".join(sorted(missing)))
     columns = [
         "playing_GK", "typeId", "x", "y", "expectedGoals",
-        "expectedGoalsOnTarget", "isBlocked", "onGoalShot", "isOwnGoal",
+        "expectedGoalsOnTarget", "isBlocked", "shotblocked", "onGoalShot", "isOwnGoal",
     ]
     events = read_event_parquet(matchlog, columns=[col for col in columns if col in available])
     shots = events.loc[events["typeId"].isin(["Attempt Saved", "Goal", "Miss", "Post"])].copy()
