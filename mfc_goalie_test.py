@@ -32,7 +32,11 @@ LEAGUE_DICT = {
     "GER2": "2. Bundesliga",
     "ITA1": "Serie A",
     "POR1": "Liga Portugal",
+    "NED1": "Eredivisie",
     "FRA1": "Ligue 1",
+    "FRA2": "Ligue 2",
+    "ITA1": "Serie A",
+    "ITA2": "Serie B",
     "SWE1": "Allsvenskan",
     "NOR1": "Eliteserien",
     "AUT1": "Austrian Bundesliga",
@@ -41,8 +45,11 @@ LEAGUE_DICT = {
     "USA1": "MLS",
     "SOU1": "South African Premier",
     "SAU1": "Saudi Pro League",
+    "SPA1": "La Liga",
+    "SPA2": "La Liga 2",
     "TUR1": "Superlig",
     "POL1": "Polish Ekstraklasa",
+    "SWI1": "Swiss Super League",
 }
 
 SEASON_DICT = {
@@ -50,6 +57,7 @@ SEASON_DICT = {
     "2324": "2023/24",
     "2425": "2024/25",
     "2526": "2025/26",
+    "2627": "2026/27",
     "2025": "2025",
     "2026": "2026",
 }
@@ -72,12 +80,14 @@ def discover_data_files(root):
         if len(parts) == 2:
             match_files[tuple(parts)] = path
 
-    for path in root.rglob("*.xlsx"):
-        if not path.stem.endswith("_playertotal"):
-            continue
-        parts = path.stem.removesuffix("_playertotal").rsplit("_", 1)
-        if len(parts) == 2:
-            player_files[tuple(parts)] = path
+    # Load standard totals first, then prefer PAR totals for the same league/season.
+    for suffix in ("_playertotal", "_playertotal_PAR"):
+        for path in sorted(root.rglob("*.xlsx")):
+            if not path.stem.endswith(suffix):
+                continue
+            parts = path.stem.removesuffix(suffix).rsplit("_", 1)
+            if len(parts) == 2:
+                player_files[tuple(parts)] = path
 
     return [
         {
@@ -562,7 +572,7 @@ st.title("MFC Goalie Test")
 
 available_files = discover_data_files(APP_ROOT)
 if not available_files:
-    st.error("No matching files found. Upload files named like `DEN1_2526.parquet` and `DEN1_2526_playertotal.xlsx`.")
+    st.error("No matching files found. Upload a matching pair such as `DEN1_2627.parquet` and `DEN1_2627_playertotal_PAR.xlsx` (or `DEN1_2627_playertotal.xlsx`).")
     st.stop()
 
 league_options = sorted({item["league"] for item in available_files}, key=league_label)
