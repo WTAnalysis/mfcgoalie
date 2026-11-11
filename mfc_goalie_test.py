@@ -865,7 +865,10 @@ def make_season_shot_maps(shots):
             marker=marker, facecolors=colour, edgecolors="white", label=label, zorder=3,
         )
     if not shots.empty and not pd.concat([saves, goals])[["goal_x", "goal_y"]].dropna().empty:
-        goal_ax.legend(loc="lower center", fontsize=8)
+        goal_ax.legend(
+            loc="upper center", bbox_to_anchor=(0.5, -0.04),
+            ncol=2, fontsize=8, columnspacing=1.5,
+        )
     else:
         goal_ax.text(
             0.5, 0.15, "No shot placement available",
